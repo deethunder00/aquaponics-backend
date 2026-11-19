@@ -44,7 +44,7 @@ const configSchema = new mongoose.Schema({
   stockingDate: { type: String, default: '' },
   harvestStart: { type: Number, default: 8 },
   harvestEnd:   { type: Number, default: 12 },
-  servoRate:    { type: Number, default: 0.65 }, // Hardcoded default fallback
+  servoRate:    { type: Number, default: 0.461 }, // Updated calibrated flow rate (g/s)
   cycleNumber:  { type: Number, default: 1 },
   lastHarvest:  { type: Date, default: null },
   updatedAt:    { type: Date, default: Date.now }
@@ -114,7 +114,7 @@ app.get('/api/r_feed', async (req, res) => {
 app.get('/api/get_config', async (req, res) => {
   try {
     const doc = await getOrCreateConfig();
-    res.json({ portions: doc.portions, stockingDate: doc.stockingDate, harvestStart: doc.harvestStart, harvestEnd: doc.harvestEnd, servoRate: doc.servoRate, cycleNumber: doc.cycleNumber, lastHarvest: doc.lastHarvest });
+    res.json({ portions: doc.portions, stockingDate: doc.stockingDate, harvestStart: doc.harvestStart, harvestEnd: doc.harvestEnd, servoRate: 0.461, cycleNumber: doc.cycleNumber, lastHarvest: doc.lastHarvest });
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
@@ -125,8 +125,8 @@ app.get('/api/set_config', async (req, res) => {
     const harvestStart = parseInt(req.query.harvestStart) || 8;
     const harvestEnd   = parseInt(req.query.harvestEnd)   || 12;
     
-    // ADVISER REQUIREMENT: Ignore req.query.servoRate and hardcode it.
-    const calibratedServoRate = 0.65; // <-- ENSURE THIS MATCHES YOUR ESP32 STEADY RATE
+    // Hardcoded calibrated flow rate matching ESP32 firmware (0.461 g/s)
+    const calibratedServoRate = 0.461;
 
     const doc = await getOrCreateConfig();
     doc.portions = portionsRaw; doc.stockingDate = stockingDate;
@@ -150,7 +150,7 @@ app.get('/api/get_esp_config', async (req, res) => {
   try {
     const doc = await getOrCreateConfig();
     const portions = (doc.portions && doc.portions.length === 12) ? doc.portions.join(',') : '0,0,0,0,0,0,0,0,0,0,0,0';
-    const body = `portions=${portions}\nstockingDate=${doc.stockingDate || ''}\nservoRate=${doc.servoRate || 0.65}\n`;
+    const body = `portions=${portions}\nstockingDate=${doc.stockingDate || ''}\nservoRate=0.461\n`;
     res.type('text/plain').send(body);
   } catch (e) { res.status(500).send('error'); }
 });

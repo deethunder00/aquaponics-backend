@@ -2,10 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const path = require('path');
+const { parseTelemetry, sensorResponse } = require('./device-protocol');
 
 const app = express();
 
 const ALLOWED_ORIGINS = [
+  ...(process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean),
   'http://localhost:3000', 'http://localhost:5500', 'http://localhost:8080',
   'http://127.0.0.1:5500', 'http://127.0.0.1:8080',
   'https://aquaponics-frontend.vercel.app', 'https://aquaponics-backend-sgr7.onrender.com'
@@ -19,6 +22,9 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/dashboard-device.js', (req, res) => res.sendFile(path.join(__dirname, 'dashboard-device.js')));
 
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB connected'))
@@ -26,9 +32,11 @@ mongoose.connect(process.env.MONGODB_URI)
 
 // ===== SCHEMAS =====
 const sensorSchema = new mongoose.Schema({
-  temp_sersor: String, ph_sensor: String, do_sensor: String,
+  temp_sensor: String, temp_sersor: String, ph_sensor: String, do_sensor: String,
   temp_status: String, ph_status: String, aerator_status: { type: String, default: 'OFF' },
   mode: { type: Number, default: 12 }, seconds_until_feed: { type: Number, default: 0 },
+  next_feed_at: Date, sample_at: Date,
+  feeding: { type: Boolean, default: null }, priming: Boolean, water_change_active: Boolean,
   date_created: { type: Date, default: Date.now }
 });
 const Sensor = mongoose.model('Sensor', sensorSchema);
@@ -73,31 +81,27 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', time: new Date().toISOString() });
 });
 
-app.get('/api/c_sensor', async (req, res) => {
+// Accept both the firmware route and the older website-backend route.
+app.get(['/api/set_sensor', '/api/c_sensor'], async (req, res) => {
+  let telemetry;
+  try { telemetry = parseTelemetry(req.query); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
   try {
-    const { temp_sersor, ph_sensor, do_sensor, temp_status, ph_status, aerator_status, mode, seconds_until_feed } = req.query;
     await Sensor.create({
-      temp_sersor: temp_sersor ?? '', ph_sensor: ph_sensor ?? '', do_sensor: do_sensor ?? '',
-      temp_status: normalizeStatus(temp_status, 'temp', temp_sersor),
-      ph_status: normalizeStatus(ph_status, 'ph', ph_sensor),
-      aerator_status: (aerator_status || 'OFF').toUpperCase(),
-      mode: parseInt(mode) || 12, seconds_until_feed: parseInt(seconds_until_feed) || 0
+      ...telemetry,
+      temp_status: normalizeStatus(req.query.temp_status, 'temp', telemetry.temp_sensor),
+      ph_status: normalizeStatus(req.query.ph_status, 'ph', telemetry.ph_sensor),
+      aerator_status: String(req.query.aerator_status || 'OFF').toUpperCase()
     });
-    const now = new Date();
-    res.send(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
-  } catch (e) { console.error(e); res.status(500).send('0'); }
+    res.type('text/plain').send('ok');
+  } catch (error) { console.error(error); res.status(500).json({ error: 'Could not save sensor reading' }); }
 });
 
 app.get('/api/r_sensor', async (req, res) => {
   try {
     const latest = await Sensor.findOne().sort({ _id: -1 });
-    if (!latest) return res.json({ temp: 0, ph: 0, do: 0, tempStatus: 'NO DATA', phStatus: 'NO DATA', aerator_status: 'OFF', mode: null, seconds_until_feed: null });
-    res.json({
-      temp: parseFloat(latest.temp_sersor), ph: parseFloat(latest.ph_sensor), do: parseFloat(latest.do_sensor),
-      tempStatus: latest.temp_status, phStatus: latest.ph_status, aerator_status: latest.aerator_status,
-      mode: latest.mode, seconds_until_feed: latest.seconds_until_feed, date_created: latest.date_created
-    });
-  } catch (e) { res.status(500).json({ error: 'failed' }); }
+    res.json(sensorResponse(latest));
+  } catch (error) { res.status(500).json({ error: 'Could not read sensor data' }); }
 });
 
 app.get('/api/feed', async (req, res) => {
@@ -156,4 +160,5 @@ app.get('/api/get_esp_config', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+if (require.main === module) app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+module.exports = app;
